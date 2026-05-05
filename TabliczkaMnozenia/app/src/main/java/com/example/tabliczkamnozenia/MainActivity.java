@@ -24,13 +24,22 @@ import java.util.Random;
 public class MainActivity extends Activity {
 
     private static final int MIN_TABLE = 1;
-    private static final int MAX_TABLE = 9;
+    private static final int MAX_TABLE = 10;
     private static final int MIN_MULTIPLIER = 1;
     private static final int MAX_MULTIPLIER = 10;
     private static final int REQUIRED_STREAK = 5;
 
+    private static final int MODE_MENU = 0;
+    private static final int MODE_LEARNING = 1;
+    private static final int MODE_TEST = 2;
+
+    private static final int TEST_QUESTION_COUNT = 20;
+    private static final int TEST_MIN_NUMBER = 1;
+    private static final int TEST_MAX_NUMBER = 10;
+
     private final Random random = new Random();
     private final ArrayList<Integer> currentSeries = new ArrayList<>();
+    private final ArrayList<Question> testQuestions = new ArrayList<>();
 
     private SharedPreferences prefs;
 
@@ -50,9 +59,18 @@ public class MainActivity extends Activity {
     private final Button[] tableButtons = new Button[MAX_TABLE + 1];
     private final TextView[] statusTextViews = new TextView[MAX_TABLE + 1];
 
+    private TextView testStatusTextView;
+
+    private int currentMode = MODE_MENU;
     private int selectedTable = 0;
     private int currentMultiplier = 0;
     private int currentSeriesIndex = 0;
+
+    private int currentLeftNumber = 0;
+    private int currentRightNumber = 0;
+
+    private int currentTestIndex = 0;
+    private int currentTestCorrectAnswers = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,44 +104,13 @@ public class MainActivity extends Activity {
         menuContainer.removeAllViews();
 
         for (int table = MIN_TABLE; table <= MAX_TABLE; table++) {
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout row = createMenuRow();
 
-            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-            );
-            rowParams.setMargins(0, 0, 0, dp(10));
-            row.setLayoutParams(rowParams);
-
-            Button button = new Button(this);
-            button.setText("Mnożenie przez " + table);
-            button.setTextSize(18);
-            button.setAllCaps(false);
-            button.setMinHeight(dp(58));
-
-            LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
-                    0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    1
-            );
-            button.setLayoutParams(buttonParams);
-
-            TextView status = new TextView(this);
-            status.setTextSize(14);
-            status.setGravity(Gravity.CENTER_VERTICAL);
-            status.setSingleLine(false);
-
-            LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
-                    dp(130),
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-            );
-            statusParams.setMargins(dp(12), 0, 0, 0);
-            status.setLayoutParams(statusParams);
+            Button button = createMenuButton("Mnożenie przez " + table);
+            TextView status = createStatusTextView();
 
             final int chosenTable = table;
-            button.setOnClickListener(v -> startQuiz(chosenTable));
+            button.setOnClickListener(v -> startLearningQuiz(chosenTable));
 
             tableButtons[table] = button;
             statusTextViews[table] = status;
@@ -132,6 +119,71 @@ public class MainActivity extends Activity {
             row.addView(status);
             menuContainer.addView(row);
         }
+
+        addTestButtonToMenu();
+    }
+
+    private void addTestButtonToMenu() {
+        LinearLayout row = createMenuRow();
+
+        Button button = createMenuButton("Test: 20 losowych zadań");
+        TextView status = createStatusTextView();
+
+        button.setOnClickListener(v -> startTest());
+
+        testStatusTextView = status;
+
+        row.addView(button);
+        row.addView(status);
+        menuContainer.addView(row);
+    }
+
+    private LinearLayout createMenuRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        rowParams.setMargins(0, 0, 0, dp(10));
+        row.setLayoutParams(rowParams);
+
+        return row;
+    }
+
+    private Button createMenuButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextSize(18);
+        button.setAllCaps(false);
+        button.setMinHeight(dp(58));
+
+        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1
+        );
+        button.setLayoutParams(buttonParams);
+
+        return button;
+    }
+
+    private TextView createStatusTextView() {
+        TextView status = new TextView(this);
+        status.setTextSize(14);
+        status.setGravity(Gravity.CENTER_VERTICAL);
+        status.setSingleLine(false);
+
+        LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
+                dp(130),
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        statusParams.setMargins(dp(12), 0, 0, 0);
+        status.setLayoutParams(statusParams);
+
+        return status;
     }
 
     private void setupQuizButtons() {
@@ -149,10 +201,16 @@ public class MainActivity extends Activity {
     }
 
     private void showMenu() {
+        currentMode = MODE_MENU;
         selectedTable = 0;
         currentMultiplier = 0;
         currentSeriesIndex = 0;
+        currentLeftNumber = 0;
+        currentRightNumber = 0;
+        currentTestIndex = 0;
+        currentTestCorrectAnswers = 0;
         currentSeries.clear();
+        testQuestions.clear();
 
         subtitleTextView.setVisibility(View.VISIBLE);
         menuContainer.setVisibility(View.VISIBLE);
@@ -177,13 +235,44 @@ public class MainActivity extends Activity {
                 status.setTextColor(Color.DKGRAY);
             }
         }
+
+        refreshTestStatus();
     }
 
-    private void startQuiz(int table) {
+    private void refreshTestStatus() {
+        if (testStatusTextView == null) {
+            return;
+        }
+
+        int bestScore = prefs.getInt(keyTestBestScore(), -1);
+        int lastScore = prefs.getInt(keyTestLastScore(), -1);
+        String lastDate = prefs.getString(keyTestLastDate(), "");
+        String completedDate = prefs.getString(keyTestCompletedDate(), "");
+
+        if (!completedDate.isEmpty()) {
+            testStatusTextView.setText("✅\nzaliczony\n" + completedDate);
+            testStatusTextView.setTextColor(Color.rgb(0, 128, 0));
+        } else if (lastScore >= 0) {
+            testStatusTextView.setText("ostatnio\n" + lastScore + "/20\n" + lastDate);
+            testStatusTextView.setTextColor(Color.DKGRAY);
+        } else if (bestScore >= 0) {
+            testStatusTextView.setText("rekord\n" + bestScore + "/20");
+            testStatusTextView.setTextColor(Color.DKGRAY);
+        } else {
+            testStatusTextView.setText("20 pytań\nz 1×1 do\n10×10");
+            testStatusTextView.setTextColor(Color.DKGRAY);
+        }
+    }
+
+    private void startLearningQuiz(int table) {
+        currentMode = MODE_LEARNING;
         selectedTable = table;
         currentMultiplier = 0;
         currentSeriesIndex = 0;
+        currentLeftNumber = 0;
+        currentRightNumber = 0;
         currentSeries.clear();
+        testQuestions.clear();
 
         subtitleTextView.setVisibility(View.GONE);
         menuContainer.setVisibility(View.GONE);
@@ -192,18 +281,18 @@ public class MainActivity extends Activity {
         quizTitleTextView.setText("Mnożenie przez " + table);
 
         if (isCompleted(table)) {
-            showCompletedScreen();
+            showCompletedLearningScreen();
         } else {
-            startNewSeries();
+            startNewLearningSeries();
         }
     }
 
-    private void showCompletedScreen() {
+    private void showCompletedLearningScreen() {
         String date = getCompletionDate(selectedTable);
 
         progressTextView.setText("Ten test jest już zaliczony.");
         questionTextView.setText("✅ Zaliczone dnia: " + date);
-        resultTextView.setText("Wróć do menu i wybierz inną kategorię.");
+        resultTextView.setText("Wróć do menu i wybierz inną kategorię albo test 20 zadań.");
         resultTextView.setTextColor(Color.rgb(0, 128, 0));
 
         answerEditText.setVisibility(View.GONE);
@@ -214,7 +303,7 @@ public class MainActivity extends Activity {
         nextButton.setOnClickListener(v -> showMenu());
     }
 
-    private void startNewSeries() {
+    private void startNewLearningSeries() {
         currentSeries.clear();
         currentSeriesIndex = 0;
 
@@ -226,27 +315,111 @@ public class MainActivity extends Activity {
 
         if (currentSeries.isEmpty()) {
             saveCompletionIfNeeded(selectedTable);
-            showCompletedScreen();
+            showCompletedLearningScreen();
             return;
         }
 
         Collections.shuffle(currentSeries, random);
-        showCurrentQuestionFromSeries();
+        showCurrentLearningQuestionFromSeries();
     }
 
-    private void showCurrentQuestionFromSeries() {
+    private void showCurrentLearningQuestionFromSeries() {
         if (currentSeries.isEmpty()) {
-            startNewSeries();
+            startNewLearningSeries();
             return;
         }
 
         if (currentSeriesIndex >= currentSeries.size()) {
-            startNewSeries();
+            startNewLearningSeries();
             return;
         }
 
         currentMultiplier = currentSeries.get(currentSeriesIndex);
+        currentLeftNumber = currentMultiplier;
+        currentRightNumber = selectedTable;
 
+        prepareQuestionScreen();
+
+        questionTextView.setText(currentLeftNumber + " × " + currentRightNumber + " = ?");
+
+        updateLearningProgressText();
+    }
+
+    private void updateLearningProgressText() {
+        int learned = countLearnedTasks(selectedTable);
+        int streak = getStreak(selectedTable, currentMultiplier);
+
+        String seriesInfo = "Seria: zadanie " + (currentSeriesIndex + 1) + "/" + currentSeries.size();
+
+        progressTextView.setText(
+                seriesInfo + "\n" +
+                "Nauczone zadania: " + learned + "/10\n" +
+                "To zadanie: " + streak + "/" + REQUIRED_STREAK +
+                " dobrych odpowiedzi pod rząd"
+        );
+    }
+
+    private void startTest() {
+        currentMode = MODE_TEST;
+        selectedTable = 0;
+        currentMultiplier = 0;
+        currentSeriesIndex = 0;
+        currentTestIndex = 0;
+        currentTestCorrectAnswers = 0;
+        currentSeries.clear();
+        testQuestions.clear();
+
+        subtitleTextView.setVisibility(View.GONE);
+        menuContainer.setVisibility(View.GONE);
+        quizContainer.setVisibility(View.VISIBLE);
+
+        quizTitleTextView.setText("Test: 20 losowych zadań");
+
+        createRandomTestQuestions();
+        showCurrentTestQuestion();
+    }
+
+    private void createRandomTestQuestions() {
+        ArrayList<Question> allQuestions = new ArrayList<>();
+
+        for (int left = TEST_MIN_NUMBER; left <= TEST_MAX_NUMBER; left++) {
+            for (int right = TEST_MIN_NUMBER; right <= TEST_MAX_NUMBER; right++) {
+                allQuestions.add(new Question(left, right));
+            }
+        }
+
+        Collections.shuffle(allQuestions, random);
+
+        for (int i = 0; i < TEST_QUESTION_COUNT && i < allQuestions.size(); i++) {
+            testQuestions.add(allQuestions.get(i));
+        }
+    }
+
+    private void showCurrentTestQuestion() {
+        if (currentTestIndex >= testQuestions.size()) {
+            finishTest();
+            return;
+        }
+
+        Question question = testQuestions.get(currentTestIndex);
+        currentLeftNumber = question.left;
+        currentRightNumber = question.right;
+
+        prepareQuestionScreen();
+
+        questionTextView.setText(currentLeftNumber + " × " + currentRightNumber + " = ?");
+        updateTestProgressText();
+    }
+
+    private void updateTestProgressText() {
+        progressTextView.setText(
+                "Pytanie: " + (currentTestIndex + 1) + "/" + testQuestions.size() + "\n" +
+                "Dobrych odpowiedzi: " + currentTestCorrectAnswers + "/" + testQuestions.size() + "\n" +
+                "Zakres: od 1×1 do 10×10"
+        );
+    }
+
+    private void prepareQuestionScreen() {
         answerEditText.setVisibility(View.VISIBLE);
         checkButton.setVisibility(View.VISIBLE);
 
@@ -261,50 +434,47 @@ public class MainActivity extends Activity {
 
         resultTextView.setText("");
         resultTextView.setTextColor(Color.DKGRAY);
-
-        questionTextView.setText(currentMultiplier + " × " + selectedTable + " = ?");
-
-        updateProgressText();
-    }
-
-    private void updateProgressText() {
-        int learned = countLearnedTasks(selectedTable);
-        int streak = getStreak(selectedTable, currentMultiplier);
-
-        String seriesInfo = "Seria: zadanie " + (currentSeriesIndex + 1) + "/" + currentSeries.size();
-
-        progressTextView.setText(
-                seriesInfo + "\n" +
-                "Nauczone zadania: " + learned + "/10\n" +
-                "To zadanie: " + streak + "/" + REQUIRED_STREAK +
-                " dobrych odpowiedzi pod rząd"
-        );
     }
 
     private void checkAnswer() {
-        if (selectedTable == 0 || currentMultiplier == 0) {
-            return;
+        if (currentMode == MODE_LEARNING) {
+            checkLearningAnswer();
+        } else if (currentMode == MODE_TEST) {
+            checkTestAnswer();
         }
+    }
 
+    private Integer readUserAnswer() {
         String answerText = answerEditText.getText().toString().trim();
 
         if (answerText.isEmpty()) {
             resultTextView.setText("❌ Wpisz odpowiedź.");
             resultTextView.setTextColor(Color.rgb(190, 0, 0));
-            return;
+            return null;
         }
 
-        int userAnswer;
-
         try {
-            userAnswer = Integer.parseInt(answerText);
+            return Integer.parseInt(answerText);
         } catch (NumberFormatException e) {
             resultTextView.setText("❌ To nie wygląda jak liczba. Wpisz sam wynik, np. 25.");
             resultTextView.setTextColor(Color.rgb(190, 0, 0));
+            return null;
+        }
+    }
+
+    private void checkLearningAnswer() {
+        if (selectedTable == 0 || currentMultiplier == 0) {
             return;
         }
 
-        int correctAnswer = currentMultiplier * selectedTable;
+        Integer userAnswerObject = readUserAnswer();
+
+        if (userAnswerObject == null) {
+            return;
+        }
+
+        int userAnswer = userAnswerObject;
+        int correctAnswer = currentLeftNumber * currentRightNumber;
         hideKeyboard();
 
         if (userAnswer == correctAnswer) {
@@ -313,7 +483,7 @@ public class MainActivity extends Activity {
             saveStreak(selectedTable, currentMultiplier, newStreak);
 
             resultTextView.setText(
-                    "✅ Dobrze! " + currentMultiplier + "×" + selectedTable +
+                    "✅ Dobrze! " + currentLeftNumber + "×" + currentRightNumber +
                     " to " + correctAnswer + "."
             );
             resultTextView.setTextColor(Color.rgb(0, 128, 0));
@@ -321,13 +491,13 @@ public class MainActivity extends Activity {
             saveStreak(selectedTable, currentMultiplier, 0);
 
             resultTextView.setText(
-                    "❌ Źle, " + currentMultiplier + "×" + selectedTable +
+                    "❌ Źle, " + currentLeftNumber + "×" + currentRightNumber +
                     " to " + correctAnswer + ", a nie jak podałeś " + userAnswer + "."
             );
             resultTextView.setTextColor(Color.rgb(190, 0, 0));
         }
 
-        updateProgressText();
+        updateLearningProgressText();
 
         answerEditText.setEnabled(false);
         checkButton.setEnabled(false);
@@ -343,21 +513,124 @@ public class MainActivity extends Activity {
 
             nextButton.setText("Wróć do menu");
             nextButton.setOnClickListener(v -> showMenu());
-        } else if (isLastQuestionInCurrentSeries()) {
+        } else if (isLastQuestionInCurrentLearningSeries()) {
             nextButton.setText("Rozpocznij kolejną serię");
-            nextButton.setOnClickListener(v -> startNewSeries());
+            nextButton.setOnClickListener(v -> startNewLearningSeries());
         } else {
             nextButton.setText("Następne pytanie");
             nextButton.setOnClickListener(v -> {
                 currentSeriesIndex++;
-                showCurrentQuestionFromSeries();
+                showCurrentLearningQuestionFromSeries();
             });
         }
 
         nextButton.setVisibility(View.VISIBLE);
     }
 
-    private boolean isLastQuestionInCurrentSeries() {
+    private void checkTestAnswer() {
+        if (currentTestIndex >= testQuestions.size()) {
+            return;
+        }
+
+        Integer userAnswerObject = readUserAnswer();
+
+        if (userAnswerObject == null) {
+            return;
+        }
+
+        int userAnswer = userAnswerObject;
+        int correctAnswer = currentLeftNumber * currentRightNumber;
+        hideKeyboard();
+
+        if (userAnswer == correctAnswer) {
+            currentTestCorrectAnswers++;
+
+            resultTextView.setText(
+                    "✅ Dobrze! " + currentLeftNumber + "×" + currentRightNumber +
+                    " to " + correctAnswer + "."
+            );
+            resultTextView.setTextColor(Color.rgb(0, 128, 0));
+        } else {
+            resultTextView.setText(
+                    "❌ Źle, " + currentLeftNumber + "×" + currentRightNumber +
+                    " to " + correctAnswer + ", a nie jak podałeś " + userAnswer + "."
+            );
+            resultTextView.setTextColor(Color.rgb(190, 0, 0));
+        }
+
+        answerEditText.setEnabled(false);
+        checkButton.setEnabled(false);
+
+        updateTestProgressText();
+
+        if (currentTestIndex >= testQuestions.size() - 1) {
+            nextButton.setText("Pokaż wynik testu");
+            nextButton.setOnClickListener(v -> finishTest());
+        } else {
+            nextButton.setText("Następne pytanie");
+            nextButton.setOnClickListener(v -> {
+                currentTestIndex++;
+                showCurrentTestQuestion();
+            });
+        }
+
+        nextButton.setVisibility(View.VISIBLE);
+    }
+
+    private void finishTest() {
+        currentMode = MODE_TEST;
+        hideKeyboard();
+
+        saveTestResult(currentTestCorrectAnswers);
+
+        answerEditText.setVisibility(View.GONE);
+        checkButton.setVisibility(View.GONE);
+
+        questionTextView.setText(currentTestCorrectAnswers + "/" + TEST_QUESTION_COUNT);
+        progressTextView.setText("Test zakończony. Zakres: od 1×1 do 10×10.");
+
+        if (currentTestCorrectAnswers == TEST_QUESTION_COUNT) {
+            String date = prefs.getString(keyTestCompletedDate(), "");
+
+            resultTextView.setText(
+                    "✅ Perfekcyjnie! Test zaliczony dnia " + date + ".\n" +
+                    "Wynik: " + currentTestCorrectAnswers + "/" + TEST_QUESTION_COUNT + "."
+            );
+            resultTextView.setTextColor(Color.rgb(0, 128, 0));
+        } else {
+            resultTextView.setText(
+                    "❌ Jeszcze nie zaliczone.\n" +
+                    "Wynik: " + currentTestCorrectAnswers + "/" + TEST_QUESTION_COUNT + ".\n" +
+                    "Spróbuj jeszcze raz. Matematyczny smok już sapie za rogiem."
+            );
+            resultTextView.setTextColor(Color.rgb(190, 0, 0));
+        }
+
+        nextButton.setVisibility(View.VISIBLE);
+        nextButton.setText("Wróć do menu");
+        nextButton.setOnClickListener(v -> showMenu());
+    }
+
+    private void saveTestResult(int score) {
+        String today = new SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(new Date());
+        int bestScore = prefs.getInt(keyTestBestScore(), -1);
+
+        SharedPreferences.Editor editor = prefs.edit()
+                .putInt(keyTestLastScore(), score)
+                .putString(keyTestLastDate(), today);
+
+        if (score > bestScore) {
+            editor.putInt(keyTestBestScore(), score);
+        }
+
+        if (score == TEST_QUESTION_COUNT && prefs.getString(keyTestCompletedDate(), "").isEmpty()) {
+            editor.putString(keyTestCompletedDate(), today);
+        }
+
+        editor.apply();
+    }
+
+    private boolean isLastQuestionInCurrentLearningSeries() {
         return currentSeriesIndex >= currentSeries.size() - 1;
     }
 
@@ -429,6 +702,22 @@ public class MainActivity extends Activity {
         return "completed_date_" + table;
     }
 
+    private String keyTestLastScore() {
+        return "test_last_score";
+    }
+
+    private String keyTestLastDate() {
+        return "test_last_date";
+    }
+
+    private String keyTestBestScore() {
+        return "test_best_score";
+    }
+
+    private String keyTestCompletedDate() {
+        return "test_completed_date";
+    }
+
     private void hideKeyboard() {
         View currentFocus = getCurrentFocus();
 
@@ -447,5 +736,15 @@ public class MainActivity extends Activity {
 
     private int dp(int value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private static class Question {
+        final int left;
+        final int right;
+
+        Question(int left, int right) {
+            this.left = left;
+            this.right = right;
+        }
     }
 }
