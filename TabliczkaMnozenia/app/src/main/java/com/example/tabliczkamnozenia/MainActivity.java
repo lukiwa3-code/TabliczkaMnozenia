@@ -16,6 +16,7 @@ import android.widget.TextView;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Random;
@@ -29,6 +30,7 @@ public class MainActivity extends Activity {
     private static final int REQUIRED_STREAK = 5;
 
     private final Random random = new Random();
+    private final ArrayList<Integer> currentSeries = new ArrayList<>();
 
     private SharedPreferences prefs;
 
@@ -50,6 +52,7 @@ public class MainActivity extends Activity {
 
     private int selectedTable = 0;
     private int currentMultiplier = 0;
+    private int currentSeriesIndex = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -148,6 +151,8 @@ public class MainActivity extends Activity {
     private void showMenu() {
         selectedTable = 0;
         currentMultiplier = 0;
+        currentSeriesIndex = 0;
+        currentSeries.clear();
 
         subtitleTextView.setVisibility(View.VISIBLE);
         menuContainer.setVisibility(View.VISIBLE);
@@ -176,6 +181,9 @@ public class MainActivity extends Activity {
 
     private void startQuiz(int table) {
         selectedTable = table;
+        currentMultiplier = 0;
+        currentSeriesIndex = 0;
+        currentSeries.clear();
 
         subtitleTextView.setVisibility(View.GONE);
         menuContainer.setVisibility(View.GONE);
@@ -186,7 +194,7 @@ public class MainActivity extends Activity {
         if (isCompleted(table)) {
             showCompletedScreen();
         } else {
-            showNextQuestion();
+            startNewSeries();
         }
     }
 
@@ -206,14 +214,38 @@ public class MainActivity extends Activity {
         nextButton.setOnClickListener(v -> showMenu());
     }
 
-    private void showNextQuestion() {
-        currentMultiplier = chooseRandomNotLearnedMultiplier(selectedTable);
+    private void startNewSeries() {
+        currentSeries.clear();
+        currentSeriesIndex = 0;
 
-        if (currentMultiplier == -1) {
+        for (int multiplier = MIN_MULTIPLIER; multiplier <= MAX_MULTIPLIER; multiplier++) {
+            if (getStreak(selectedTable, multiplier) < REQUIRED_STREAK) {
+                currentSeries.add(multiplier);
+            }
+        }
+
+        if (currentSeries.isEmpty()) {
             saveCompletionIfNeeded(selectedTable);
             showCompletedScreen();
             return;
         }
+
+        Collections.shuffle(currentSeries, random);
+        showCurrentQuestionFromSeries();
+    }
+
+    private void showCurrentQuestionFromSeries() {
+        if (currentSeries.isEmpty()) {
+            startNewSeries();
+            return;
+        }
+
+        if (currentSeriesIndex >= currentSeries.size()) {
+            startNewSeries();
+            return;
+        }
+
+        currentMultiplier = currentSeries.get(currentSeriesIndex);
 
         answerEditText.setVisibility(View.VISIBLE);
         checkButton.setVisibility(View.VISIBLE);
@@ -230,7 +262,7 @@ public class MainActivity extends Activity {
         resultTextView.setText("");
         resultTextView.setTextColor(Color.DKGRAY);
 
-        questionTextView.setText(selectedTable + " × " + currentMultiplier + " = ?");
+        questionTextView.setText(currentMultiplier + " × " + selectedTable + " = ?");
 
         updateProgressText();
     }
@@ -239,7 +271,10 @@ public class MainActivity extends Activity {
         int learned = countLearnedTasks(selectedTable);
         int streak = getStreak(selectedTable, currentMultiplier);
 
+        String seriesInfo = "Seria: zadanie " + (currentSeriesIndex + 1) + "/" + currentSeries.size();
+
         progressTextView.setText(
+                seriesInfo + "\n" +
                 "Nauczone zadania: " + learned + "/10\n" +
                 "To zadanie: " + streak + "/" + REQUIRED_STREAK +
                 " dobrych odpowiedzi pod rząd"
@@ -269,7 +304,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        int correctAnswer = selectedTable * currentMultiplier;
+        int correctAnswer = currentMultiplier * selectedTable;
         hideKeyboard();
 
         if (userAnswer == correctAnswer) {
@@ -278,7 +313,7 @@ public class MainActivity extends Activity {
             saveStreak(selectedTable, currentMultiplier, newStreak);
 
             resultTextView.setText(
-                    "✅ Dobrze! " + selectedTable + "×" + currentMultiplier +
+                    "✅ Dobrze! " + currentMultiplier + "×" + selectedTable +
                     " to " + correctAnswer + "."
             );
             resultTextView.setTextColor(Color.rgb(0, 128, 0));
@@ -286,7 +321,7 @@ public class MainActivity extends Activity {
             saveStreak(selectedTable, currentMultiplier, 0);
 
             resultTextView.setText(
-                    "❌ Źle, " + selectedTable + "×" + currentMultiplier +
+                    "❌ Źle, " + currentMultiplier + "×" + selectedTable +
                     " to " + correctAnswer + ", a nie jak podałeś " + userAnswer + "."
             );
             resultTextView.setTextColor(Color.rgb(190, 0, 0));
@@ -308,28 +343,22 @@ public class MainActivity extends Activity {
 
             nextButton.setText("Wróć do menu");
             nextButton.setOnClickListener(v -> showMenu());
+        } else if (isLastQuestionInCurrentSeries()) {
+            nextButton.setText("Rozpocznij kolejną serię");
+            nextButton.setOnClickListener(v -> startNewSeries());
         } else {
             nextButton.setText("Następne pytanie");
-            nextButton.setOnClickListener(v -> showNextQuestion());
+            nextButton.setOnClickListener(v -> {
+                currentSeriesIndex++;
+                showCurrentQuestionFromSeries();
+            });
         }
 
         nextButton.setVisibility(View.VISIBLE);
     }
 
-    private int chooseRandomNotLearnedMultiplier(int table) {
-        ArrayList<Integer> notLearned = new ArrayList<>();
-
-        for (int multiplier = MIN_MULTIPLIER; multiplier <= MAX_MULTIPLIER; multiplier++) {
-            if (getStreak(table, multiplier) < REQUIRED_STREAK) {
-                notLearned.add(multiplier);
-            }
-        }
-
-        if (notLearned.isEmpty()) {
-            return -1;
-        }
-
-        return notLearned.get(random.nextInt(notLearned.size()));
+    private boolean isLastQuestionInCurrentSeries() {
+        return currentSeriesIndex >= currentSeries.size() - 1;
     }
 
     private boolean isTableFullyLearned(int table) {
